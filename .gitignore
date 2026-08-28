@@ -1,0 +1,24 @@
+# Echte Kunden-/Patientendaten -- niemals einchecken
+*.pdf
+Debitoren.xlsx
+Kunden_Debitoren_Liste*.xlsx
+ausgabe/
+CS_Druck_*/
+CS-Druck*/
+uebersicht_*.xlsx
+log_*.txt
+
+# Build-Artefakte
+dist/
+build/
+__pycache__/
+*.spec
+*.exe
+*.zip
+
+# Zertifikate/Schlüssel
+*.cer
+*.pfx
+*.p12
+
+fuer Kunde/
