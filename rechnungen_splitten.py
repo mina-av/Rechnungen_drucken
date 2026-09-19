@@ -96,6 +96,12 @@ class Rechnungsgruppe:
         return self.kundenname or "Unbekannt"
 
 
+def euro_formatieren(betrag):
+    """Formatiert einen Betrag im deutschen Format: Punkt als Tausendertrenner,
+    Komma als Dezimaltrennzeichen, immer zwei Nachkommastellen (z.B. 3245.8 -> "3.245,80")."""
+    return f"{betrag:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
 def sanitize_dateiname(text):
     return INVALID_FILENAME_CHARS.sub("-", text).strip()
 
@@ -559,7 +565,14 @@ def verarbeite(pdf_pfad, ziel_ordner=None):
 
     lauf_ordnername = sanitize_dateiname(f"{pdf_pfad.stem}_{heute_iso}_{zeitstempel}")
     ausgabe_ordner = ziel_ordner / lauf_ordnername
-    ausgabe_ordner.mkdir(parents=True, exist_ok=True)
+    laufzaehler = 2
+    while ausgabe_ordner.exists():
+        # Zwei Laeufe innerhalb derselben Sekunde (z.B. schnell aufeinanderfolgende
+        # Klicks) duerfen niemals denselben Ordner treffen -- sonst ueberschreibt
+        # der zweite Lauf lautlos die Rechnungen des ersten.
+        ausgabe_ordner = ziel_ordner / f"{lauf_ordnername}_{laufzaehler}"
+        laufzaehler += 1
+    ausgabe_ordner.mkdir(parents=True)
 
     warnungen = []
 
@@ -641,6 +654,8 @@ def verarbeite(pdf_pfad, ziel_ordner=None):
         })
 
 
+    gesamtsumme = round(sum(r["betrag"] for r in rechnungen_fuer_excel if r["betrag"] is not None), 2)
+
     excel_pfad = ausgabe_ordner / f"uebersicht_{heute_iso}.xlsx"
     excel_uebersicht_schreiben(excel_pfad, rechnungen_fuer_excel, fehlende_nummern)
 
@@ -663,47 +678,222 @@ def verarbeite(pdf_pfad, ziel_ordner=None):
         "gruppen": len(gruppen),
         "warnungen": warnungen,
         "ausgabe_ordner": ausgabe_ordner,
+        "excel_pfad": excel_pfad,
+        "gesamtsumme": gesamtsumme,
     }
 
 
 def gui_main():
     import tkinter as tk
-    from tkinter import filedialog, messagebox
+    from tkinter import filedialog, messagebox, ttk
+
+    FARBE_MARKE = "#1c3d5a"
+    FARBE_HINTERGRUND = "#f4f6f8"
+    FARBE_AKZENT = "#2563eb"
+    FARBE_AKZENT_HOVER = "#1d4fc4"
 
     root = tk.Tk()
-    root.withdraw()
+    root.title("Rechnungen aufteilen")
+    root.configure(bg=FARBE_HINTERGRUND)
 
-    pdf_pfad = filedialog.askopenfilename(
-        title="Sammel-PDF auswählen",
-        filetypes=[("PDF-Dateien", "*.pdf")],
+    stil = ttk.Style(root)
+    stil.theme_use("clam")
+    stil.configure("TFrame", background=FARBE_HINTERGRUND)
+    stil.configure("TLabel", background=FARBE_HINTERGRUND, font=("Segoe UI", 9))
+    stil.configure("Schritt.TLabel", background=FARBE_HINTERGRUND, foreground=FARBE_MARKE, font=("Segoe UI", 9, "bold"))
+    stil.configure("Hinweis.TLabel", background=FARBE_HINTERGRUND, foreground="#5a6774", font=("Segoe UI", 8))
+    stil.configure("Kopf.TFrame", background=FARBE_MARKE)
+    stil.configure("Kopf.TLabel", background=FARBE_MARKE, foreground="white", font=("Segoe UI", 13, "bold"))
+    stil.configure("Akzent.TButton", background=FARBE_AKZENT, foreground="white", font=("Segoe UI", 9, "bold"), padding=6)
+    stil.map("Akzent.TButton",
+             background=[("disabled", "#a9b4c2"), ("active", FARBE_AKZENT_HOVER)],
+             foreground=[("disabled", "#eef1f5")])
+    stil.configure("ErgebnisFeld.TLabel", background=FARBE_HINTERGRUND, font=("Segoe UI", 9, "bold"))
+    stil.configure("ErgebnisWert.TLabel", background=FARBE_HINTERGRUND, font=("Segoe UI", 11, "bold"), foreground=FARBE_MARKE)
+
+    # Zielordner wird beim PDF-Wechsel automatisch vorgeschlagen, solange die
+    # Person das Feld nicht selbst manuell geaendert hat.
+    ziel_ordner_manuell_geaendert = False
+    ausgabe_ergebnis = {}
+
+    aussenabstand = {"padx": 12, "pady": 6}
+
+    kopf = ttk.Frame(root, style="Kopf.TFrame")
+    kopf.grid(row=0, column=0, sticky="we")
+    ttk.Label(kopf, text="Rechnungen aufteilen", style="Kopf.TLabel").pack(padx=14, pady=10, anchor="w")
+
+    rahmen = ttk.Frame(root, padding=12)
+    rahmen.grid(row=1, column=0, sticky="nsew")
+
+    ttk.Label(rahmen, text="1. Sammel-PDF auswählen", style="Schritt.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+    ttk.Label(
+        rahmen, text="Die CuraSoft-Sammeldatei mit mehreren Rechnungen, die aufgeteilt werden soll.",
+        style="Hinweis.TLabel",
+    ).grid(row=1, column=0, columnspan=2, sticky="w", padx=(0, 0))
+    pdf_var = tk.StringVar()
+    pdf_feld = ttk.Entry(rahmen, textvariable=pdf_var, width=55, state="readonly")
+    pdf_feld.grid(row=2, column=0, sticky="we", **aussenabstand)
+
+    ttk.Label(rahmen, text="2. Zielordner", style="Schritt.TLabel").grid(row=3, column=0, columnspan=2, sticky="w")
+    ttk.Label(
+        rahmen, text="Hier legt das Programm die Einzelrechnungen, die Excel-Übersicht und das Log ab.",
+        style="Hinweis.TLabel",
+    ).grid(row=4, column=0, columnspan=2, sticky="w")
+    ziel_var = tk.StringVar()
+    ziel_feld = ttk.Entry(rahmen, textvariable=ziel_var, width=55)
+    ziel_feld.grid(row=5, column=0, sticky="we", **aussenabstand)
+
+    start_knopf = ttk.Button(rahmen, text="Rechnungen aufteilen", state="disabled", style="Akzent.TButton")
+    start_knopf.grid(row=6, column=0, columnspan=2, pady=(4, 10))
+
+    trenner = ttk.Separator(rahmen, orient="horizontal")
+    trenner.grid(row=7, column=0, columnspan=2, sticky="we", pady=(0, 6))
+
+    status_var = tk.StringVar(value="Noch keine Rechnungen aufgeteilt.")
+    ttk.Label(rahmen, textvariable=status_var, style="Hinweis.TLabel").grid(row=8, column=0, columnspan=2, sticky="w")
+
+    ergebnis_werte = ttk.Frame(rahmen)
+    ergebnis_werte.grid(row=9, column=0, columnspan=2, sticky="w", pady=(6, 0))
+    ttk.Label(ergebnis_werte, text="Anzahl Rechnungen:", style="ErgebnisFeld.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
+    anzahl_var = tk.StringVar(value="–")
+    ttk.Label(ergebnis_werte, textvariable=anzahl_var, style="ErgebnisWert.TLabel").grid(row=0, column=1, sticky="w")
+    ttk.Label(ergebnis_werte, text="Gesamtsumme:", style="ErgebnisFeld.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(2, 0))
+    summe_var = tk.StringVar(value="–")
+    ttk.Label(ergebnis_werte, textvariable=summe_var, style="ErgebnisWert.TLabel").grid(row=1, column=1, sticky="w", pady=(2, 0))
+
+    ttk.Label(rahmen, text="Anmerkungen:", style="ErgebnisFeld.TLabel").grid(row=10, column=0, columnspan=2, sticky="w", pady=(8, 2))
+    anmerkungen_text = tk.Text(
+        rahmen, width=64, height=7, state="disabled", wrap="word",
+        bg="white", relief="solid", borderwidth=1, highlightthickness=0,
     )
-    if not pdf_pfad:
-        return
+    anmerkungen_text.grid(row=11, column=0, columnspan=2, sticky="we", padx=12)
+    anmerkungen_text.tag_configure("ok", foreground="#1a7a1a")
+    anmerkungen_text.tag_configure("warnung", foreground="#b35900")
 
-    pdf_pfad_obj = Path(pdf_pfad)
-    ziel_ordner = filedialog.askdirectory(
-        title="In welchem Ordner sollen die Ergebnisse abgelegt werden?",
-        initialdir=str(pdf_pfad_obj.parent),
-    )
-    if not ziel_ordner:
-        return
+    knopf_leiste = ttk.Frame(rahmen)
+    knopf_leiste.grid(row=12, column=0, columnspan=2, pady=(8, 0))
+    ordner_knopf = ttk.Button(knopf_leiste, text="Ausgabeordner öffnen", state="disabled")
+    ordner_knopf.grid(row=0, column=0, padx=4)
+    excel_knopf = ttk.Button(knopf_leiste, text="Excel öffnen", state="disabled")
+    excel_knopf.grid(row=0, column=1, padx=4)
+    loeschen_knopf = ttk.Button(knopf_leiste, text="Sammel-PDF löschen", state="disabled")
+    loeschen_knopf.grid(row=0, column=2, padx=4)
 
-    try:
-        ergebnis = verarbeite(pdf_pfad, ziel_ordner=ziel_ordner)
-    except Exception as exc:  # noqa: BLE001 - Endnutzer soll Fehlertext sehen, kein Absturz
-        messagebox.showerror("Fehler", f"Verarbeitung fehlgeschlagen:\n{exc}")
-        return
+    def anmerkungen_anzeigen(zeilen_mit_tags):
+        anmerkungen_text.config(state="normal")
+        anmerkungen_text.delete("1.0", "end")
+        for text, tag in zeilen_mit_tags:
+            anmerkungen_text.insert("end", text, tag)
+        anmerkungen_text.config(state="disabled")
 
-    meldung = f"{ergebnis['gruppen']} Rechnung(en) erzeugt."
-    if ergebnis["warnungen"]:
-        meldung += f"\n\n{len(ergebnis['warnungen'])} Warnung(en) - Details siehe Log-Datei im Ausgabeordner."
-    meldung += f"\n\nAusgabeordner:\n{ergebnis['ausgabe_ordner']}"
-    messagebox.showinfo("Fertig", meldung)
+    def datei_oeffnen(pfad):
+        try:
+            os.startfile(pfad)  # noqa: S606 - gewuenschtes Verhalten fuer Endnutzer
+        except OSError as exc:
+            messagebox.showerror("Fehler", f"Konnte nicht geöffnet werden:\n{exc}")
 
-    try:
-        os.startfile(ergebnis["ausgabe_ordner"])  # noqa: S606 - gewuenschtes Verhalten fuer Endnutzer
-    except OSError:
-        pass
+    def sammel_pdf_loeschen():
+        pfad = ausgabe_ergebnis.get("quelle")
+        if not pfad:
+            return
+        bestaetigt = messagebox.askyesno(
+            "Sammel-PDF löschen",
+            f"Soll die Ausgangsdatei wirklich unwiderruflich gelöscht werden?\n\n{pfad}",
+            icon="warning",
+        )
+        if not bestaetigt:
+            return
+        try:
+            Path(pfad).unlink()
+        except OSError as exc:
+            messagebox.showerror("Fehler", f"Datei konnte nicht gelöscht werden:\n{exc}")
+            return
+        loeschen_knopf.config(state="disabled")
+        status_var.set("Ausgangsdatei gelöscht.")
+
+    def pdf_waehlen():
+        nonlocal ziel_ordner_manuell_geaendert
+        pfad = filedialog.askopenfilename(
+            title="Sammel-PDF auswählen",
+            filetypes=[("PDF-Dateien", "*.pdf")],
+        )
+        if not pfad:
+            return
+        loeschen_knopf.config(state="disabled")
+        pdf_var.set(pfad)
+        if not ziel_ordner_manuell_geaendert:
+            ziel_var.set(str(Path(pfad).parent / "ausgabe"))
+        start_knopf.config(state="normal")
+
+    def ziel_waehlen():
+        nonlocal ziel_ordner_manuell_geaendert
+        start = ziel_var.get() or str(Path(pdf_var.get()).parent)
+        pfad = filedialog.askdirectory(
+            title="In welchem Ordner sollen die Ergebnisse abgelegt werden?",
+            initialdir=start,
+        )
+        if pfad:
+            ziel_var.set(pfad)
+            ziel_ordner_manuell_geaendert = True
+
+    def ziel_manuell_editiert(_event):
+        nonlocal ziel_ordner_manuell_geaendert
+        ziel_ordner_manuell_geaendert = True
+
+    def aufteilen_starten():
+        pdf_pfad = pdf_var.get()
+        ziel_ordner = ziel_var.get()
+        if not pdf_pfad or not ziel_ordner:
+            return
+
+        start_knopf.config(state="disabled")
+        ordner_knopf.config(state="disabled")
+        excel_knopf.config(state="disabled")
+        loeschen_knopf.config(state="disabled")
+        status_var.set("Verarbeite ...")
+        anzahl_var.set("–")
+        summe_var.set("–")
+        anmerkungen_anzeigen([("Bitte warten ...", None)])
+        root.update()
+
+        try:
+            ergebnis = verarbeite(pdf_pfad, ziel_ordner=ziel_ordner)
+        except Exception as exc:  # noqa: BLE001 - Endnutzer soll Fehlertext sehen, kein Absturz
+            status_var.set("Verarbeitung fehlgeschlagen.")
+            anmerkungen_anzeigen([(str(exc), "warnung")])
+            start_knopf.config(state="normal")
+            return
+
+        ausgabe_ergebnis["ordner"] = ergebnis["ausgabe_ordner"]
+        ausgabe_ergebnis["excel"] = ergebnis["excel_pfad"]
+        ausgabe_ergebnis["quelle"] = pdf_pfad
+
+        status_var.set("Fertig.")
+        anzahl_var.set(str(ergebnis["gruppen"]))
+        summe_var.set(euro_formatieren(ergebnis["gesamtsumme"]) + " EUR")
+
+        if ergebnis["warnungen"]:
+            zeilen = [(f"{len(ergebnis['warnungen'])} Anmerkung(en):\n", "warnung")]
+            zeilen.extend((f"  • {w}\n", "warnung") for w in ergebnis["warnungen"])
+        else:
+            zeilen = [("Keine Anmerkungen.", "ok")]
+        anmerkungen_anzeigen(zeilen)
+
+        start_knopf.config(state="normal")
+        ordner_knopf.config(state="normal")
+        excel_knopf.config(state="normal")
+        loeschen_knopf.config(state="normal")
+
+    start_knopf.config(command=aufteilen_starten)
+    ordner_knopf.config(command=lambda: datei_oeffnen(ausgabe_ergebnis["ordner"]))
+    excel_knopf.config(command=lambda: datei_oeffnen(ausgabe_ergebnis["excel"]))
+    loeschen_knopf.config(command=sammel_pdf_loeschen)
+
+    ttk.Button(rahmen, text="Durchsuchen", command=pdf_waehlen).grid(row=2, column=1, padx=(0, 12))
+    ttk.Button(rahmen, text="Durchsuchen", command=ziel_waehlen).grid(row=5, column=1, padx=(0, 12))
+    ziel_feld.bind("<Key>", ziel_manuell_editiert)
+
+    root.mainloop()
 
 
 def main():

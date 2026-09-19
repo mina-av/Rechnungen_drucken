@@ -78,24 +78,15 @@ Voraussetzungen: `pypdf`, `openpyxl`, `factur-x`, `lxml`, `pikepdf` (alle per
 `pip install`), PyInstaller.
 
 ```powershell
-$PKGDIR = py -c "import facturx, os; print(os.path.dirname(facturx.__file__))"
-
-py -m PyInstaller --onefile --windowed --icon icon.ico --name "Rechnungen_splitten" `
-  --add-data "$PKGDIR\xsd_and_schematron;facturx/xsd_and_schematron" `
-  --add-data "$PKGDIR\xmp;facturx/xmp" `
-  --add-data "sRGB.icc;." `
-  rechnungen_splitten.py
-
-py -m PyInstaller --onefile --windowed --icon icon.ico --name "Beleg_pruefen" `
-  --add-data "$PKGDIR\xsd_and_schematron;facturx/xsd_and_schematron" `
-  --add-data "$PKGDIR\xmp;facturx/xmp" `
-  --add-data "sRGB.icc;." `
-  beleg_pruefen.py
+.\build.ps1
 ```
 
-Die `--add-data`-Einträge sind nötig, weil die `factur-x`-Bibliothek ihre
-XSD-/Schematron-Dateien zur Laufzeit von der Festplatte lädt — PyInstaller
-bündelt sie sonst nicht automatisch mit.
+Baut beide EXE-Dateien (`Rechnungen_splitten.exe`, `Beleg_pruefen.exe`) neu und
+legt sie direkt im Projektordner ab. Muss nach jeder Änderung an den `.py`-
+Dateien erneut laufen — eine Codeänderung wirkt sich nicht automatisch auf
+bestehende EXE-Dateien aus. Die `--add-data`-Einträge im Skript sind nötig,
+weil die `factur-x`-Bibliothek ihre XSD-/Schematron-Dateien zur Laufzeit von
+der Festplatte lädt — PyInstaller bündelt sie sonst nicht automatisch mit.
 
 Die fertige EXE wird mit einem selbstsignierten Zertifikat signiert (siehe
 unten), damit Windows SmartScreen sie nach einmaliger Freigabe bei der IT
